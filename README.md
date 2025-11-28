@@ -21,12 +21,18 @@ You can verify the installation with:
 uv --version
 ```
 
-To set everything up:
+Setup virtual environment:
 
 ```bash
 uv sync
 uv venv
 source .venv/bin/activate
+```
+
+Setup playwright:
+
+```bash
+python -m playwright install
 ```
 
 Test that everything works:
