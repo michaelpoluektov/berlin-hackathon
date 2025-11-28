@@ -28,3 +28,9 @@ uv sync
 uv venv
 source .venv/bin/activate
 ```
+
+Test that everything works:
+
+```bash
+python test_playwright.py
+```
