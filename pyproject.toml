@@ -13,7 +13,9 @@ dependencies = [
     "pillow>=12.0.0",
     "playwright>=1.56.0",
     "py-tgcalls>=2.2.8",
+    "pyaudio>=0.2.14",
     "pyautogui>=0.9.54",
+    "pydub>=0.25.1",
     "python-dotenv>=1.2.1",
     "telethon>=1.42.0",
 ]

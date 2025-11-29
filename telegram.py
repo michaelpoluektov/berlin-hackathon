@@ -1,3 +1,4 @@
+import asyncio
 import os
 from pathlib import Path
 from typing import Awaitable, Callable, Optional
@@ -28,8 +29,9 @@ SAMPLE_IMAGE = str(Path.home() / "Downloads" / "newplot.png")
 
 AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=2)
 
-AudioCallback = Callable[[int, np.ndarray], Awaitable[None]]
+AudioCallback = Callable[[np.ndarray], Awaitable[None]]
 MessageCallback = Callable[[int, str], Awaitable[None]]
+AgentCalledCallback = Callable[[int], Awaitable[None]]
 
 
 class TelegramClient:
@@ -37,6 +39,7 @@ class TelegramClient:
         self,
         audio_callback: AudioCallback,
         message_callback: MessageCallback,
+        agent_called: Optional[AgentCalledCallback] = None,
     ):
         self.app = TelethonClient(
             "py-tgcalls",
@@ -47,6 +50,7 @@ class TelegramClient:
 
         self.audio_callback: AudioCallback = audio_callback
         self.message_callback: MessageCallback = message_callback
+        self.agent_called: Optional[AgentCalledCallback] = agent_called
 
         self._register_handlers()
 
@@ -100,11 +104,17 @@ class TelegramClient:
         """Send a text message to a chat."""
         await self.app.send_message(chat_id, message)
 
-    def start(self) -> None:
-        """Start py-tgcalls (and underlying Telethon client) and block."""
-        self.call_py.start()  # type: ignore
+    async def start(self) -> None:
+        """
+        Start py-tgcalls (and underlying Telethon client) and block
+        until the process is stopped.
+        """
+        # Start Telethon client and PyTgCalls
+        await self.app.start()
+        await self.call_py.start()
         print("[*] Running. Call this account from another Telegram client to test.")
-        idle()
+        # Keep the loop alive
+        await idle()
 
     def _register_handlers(self) -> None:
         # === Telethon message handlers ===
@@ -121,6 +131,7 @@ class TelegramClient:
             chat_id = update.chat_id
             print(f"[+] Incoming call from {chat_id}, answering...")
 
+            # Answer call and start recording
             await self.call_py.play(
                 chat_id,
                 MediaStream(ExternalMedia.AUDIO, AUDIO_PARAMETERS),
@@ -128,6 +139,10 @@ class TelegramClient:
             await self._start_recording(chat_id, enable_video=False)
 
             print(f"[+] Call answered and recording started for chat {chat_id}")
+
+            # Notify user code that the agent was called
+            if self.agent_called is not None:
+                await self.agent_called(chat_id)
 
         @self.call_py.on_update(
             filters.stream_frame(Direction.INCOMING, Device.MICROPHONE)
@@ -142,7 +157,7 @@ class TelegramClient:
                 return
 
             # Call user-provided audio callback
-            await self.audio_callback(update.chat_id, samples)
+            await self.audio_callback(samples)
 
         @self.call_py.on_update(
             filters.stream_frame(Direction.INCOMING, Device.CAMERA | Device.SCREEN)
@@ -159,16 +174,37 @@ class TelegramClient:
             print(f"Stream ended in {update.chat_id}", update)
 
 
-if __name__ == "__main__":
+# ===== Async main orchestration =====
 
-    async def default_audio_callback(chat_id: int, samples: np.ndarray) -> None:
-        print(samples[:5])
 
-    async def default_message_callback(chat_id: int, message: str) -> None:
-        print(f"[message] Chat {chat_id}: {message}")
+async def default_audio_callback(samples: np.ndarray) -> None:
+    print(samples[:5])
 
+
+async def default_message_callback(chat_id: int, message: str) -> None:
+    print(f"[message] Chat {chat_id}: {message}")
+
+
+async def main() -> None:
+    # Placeholder; will be captured by the callback closure.
+    client: TelegramClient
+
+    async def agent_called(chat_id: int) -> None:
+        print(f"[agent_called] Handling call in chat {chat_id}")
+        await client.show_image(chat_id, SAMPLE_IMAGE)
+        await asyncio.sleep(5)  # wait a bit
+        await client.play_audio(chat_id)  # plays SAMPLE_MEDIA by default
+
+    # Instantiate client with callbacks
     client = TelegramClient(
         audio_callback=default_audio_callback,
         message_callback=default_message_callback,
+        agent_called=agent_called,
     )
-    client.start()
+
+    # Start client and block (idle) inside
+    await client.start()
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

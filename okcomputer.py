@@ -6,6 +6,7 @@ from google import genai
 from playwright.async_api import async_playwright
 
 from agent import ComputerUseAgent
+from telegram import TelegramClient
 
 
 async def main_async():
