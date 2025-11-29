@@ -15,6 +15,22 @@ CHUNK_SIZE = 1024
 
 MODEL = "models/gemini-2.5-flash-native-audio-preview-09-2025"
 
+use_computer_function = {
+    "name": "ask_computer_agent",
+    "description": "Ask the computer agent to perform an action, such as searching the web.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "description": "Description of the action to perform. Must be a simple string",
+            },
+        },
+        "required": ["action"],
+    },
+}
+tools = types.Tool(function_declarations=[use_computer_function])
+
 client = genai.Client(
     http_options={"api_version": "v1beta"},
     api_key=os.environ.get("GEMINI_API_KEY"),
@@ -32,13 +48,14 @@ CONFIG = types.LiveConnectConfig(
         trigger_tokens=25600,
         sliding_window=types.SlidingWindow(target_tokens=12800),
     ),
+    tools=[tools],
 )
 
 pya = pyaudio.PyAudio()
 
 
 class AudioLoop:
-    def __init__(self, audio_handler=None):
+    def __init__(self, execute_agent_callback, audio_handler=None):
         """
         audio_handler: async callable taking a single bytes argument (PCM data).
         If None, default handler plays audio back via PyAudio.
@@ -48,6 +65,7 @@ class AudioLoop:
         self.output_stream = None
 
         self.out_queue = None  # mic → model
+        self.execute_agent = execute_agent_callback
 
         self.audio_handler = audio_handler or self._default_audio_handler
 
@@ -122,6 +140,19 @@ class AudioLoop:
         while True:
             turn = self.session.receive()
             async for response in turn:
+                if response.tool_call:
+                    function_responses = []
+                    for fc in response.tool_call.function_calls:
+                        action_str = fc.args["action"]
+                        response = await self.execute_agent(action_str)
+                        function_response = types.FunctionResponse(
+                            id=fc.id, name=fc.name, response={"result": "ok"}
+                        )
+                        function_responses.append(function_response)
+
+                    await self.session.send_tool_response(
+                        function_responses=function_responses
+                    )
                 if data := response.data:
                     # Audio (24kHz PCM) from model
                     await self.audio_handler(data)

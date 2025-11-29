@@ -1,7 +1,7 @@
 import asyncio
 import os
 from itertools import count
-from typing import Callable, Optional
+from typing import Callable, Optional, Awaitable
 
 from dotenv import load_dotenv
 from google import genai
@@ -15,7 +15,7 @@ class ComputerUseAgent:
         self,
         client: genai.Client,
         page: Page,
-        screenshot_callback: Optional[Callable[[bytes], None]] = None,
+        screenshot_callback: Optional[Callable[[bytes], Awaitable[None]]] = None,
         text_callback: Optional[Callable[[str], None]] = None,
         screen_width: int = 1440,
         screen_height: int = 900,
@@ -23,7 +23,7 @@ class ComputerUseAgent:
     ) -> None:
         self.client = client
         self.page = page
-        self.screenshot_callback = screenshot_callback
+        self.screenshot_callback = None
         self.text_callback = text_callback
         self.screen_width = screen_width
         self.screen_height = screen_height
@@ -40,6 +40,9 @@ class ComputerUseAgent:
             thinking_config=types.ThinkingConfig(include_thoughts=True),
         )
 
+    def set_screenshot_callback(self, screenshot_callback):
+        self.screenshot_callback = screenshot_callback
+
     @staticmethod
     def denormalize_x(x: int, screen_width: int) -> int:
         """Convert normalized x coordinate (0-1000) to actual pixel coordinate."""
@@ -54,7 +57,7 @@ class ComputerUseAgent:
         """Take a screenshot and invoke the screenshot callback."""
         screenshot_bytes = await self.page.screenshot(type="png")
         if self.screenshot_callback is not None:
-            self.screenshot_callback(screenshot_bytes)
+            await self.screenshot_callback(screenshot_bytes)
         return screenshot_bytes
 
     async def _execute_function_calls(
@@ -143,7 +146,7 @@ class ComputerUseAgent:
                 if self.text_callback is not None:
                     self.text_callback(text)
 
-    async def execute_task(self, user_prompt: str) -> None:
+    async def execute_task(self, user_prompt: str) -> str:
         """Run the agent loop for the given user task."""
         print(f"Goal: {user_prompt}")
 
@@ -159,6 +162,8 @@ class ComputerUseAgent:
                 ],
             )
         ]
+
+        texts = []
 
         for i in range(self.turn_limit):
             print(f"\n--- Turn {i + 1} ---")
@@ -176,6 +181,7 @@ class ComputerUseAgent:
 
             # Handle all text emitted by the model
             self._handle_text_from_model(candidate)
+            texts.append(candidate)
 
             contents.append(candidate.content)
 
@@ -200,6 +206,8 @@ class ComputerUseAgent:
                 )
             )
 
+        return "\n".join(texts)
+
 
 async def main_async():
     load_dotenv()
@@ -222,7 +230,7 @@ async def main_async():
     os.makedirs(screenshot_dir, exist_ok=True)
     screenshot_counter = count(1)
 
-    def screenshot_callback(screenshot_bytes: bytes) -> None:
+    async def screenshot_callback(screenshot_bytes: bytes) -> None:
         idx = next(screenshot_counter)
         filename = os.path.join(screenshot_dir, f"screenshot_{idx:03d}.png")
         with open(filename, "wb") as f:
