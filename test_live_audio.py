@@ -46,15 +46,14 @@ class AudioLoop:
         self.session = None
         self.mic_stream = None
         self.output_stream = None
-        self.out_queue = None
 
-        # Use provided handler or default playback handler
+        self.out_queue = None  # mic → model
+
         self.audio_handler = audio_handler or self._default_audio_handler
 
     async def _default_audio_handler(self, data: bytes):
         """Default audio handler: play audio back using PyAudio."""
         if self.output_stream is None:
-            # Lazily open output stream on first audio chunk
             self.output_stream = await asyncio.to_thread(
                 pya.open,
                 format=FORMAT,
@@ -65,11 +64,22 @@ class AudioLoop:
         await asyncio.to_thread(self.output_stream.write, data)
 
     async def send_text(self):
+        """Send text messages using send_client_content."""
         while True:
             text = await asyncio.to_thread(input, "message > ")
             if text.lower() == "q":
                 break
-            await self.session.send(input=text or ".", end_of_turn=True)
+
+            user_text = text or "."
+
+            # Turn-based text → model
+            await self.session.send_client_content(
+                turns=types.Content(
+                    role="user",
+                    parts=[types.Part(text=user_text)],
+                ),
+                turn_complete=True,
+            )
 
     async def listen_audio(self):
         """Read from microphone and enqueue audio chunks to be sent to the model."""
@@ -91,24 +101,32 @@ class AudioLoop:
 
         while True:
             data = await asyncio.to_thread(self.mic_stream.read, CHUNK_SIZE, **kwargs)
+            # print(type(data))
+            # print(np.frombuffer(data, dtype=np.int16))
+            # Queue raw PCM for realtime input
             await self.out_queue.put({"data": data, "mime_type": "audio/pcm"})
 
     async def send_audio(self):
-        """Background task to send queued audio to the model."""
+        """Send queued audio to the model using send_realtime_input."""
         while True:
             msg = await self.out_queue.get()
-            await self.session.send(input=msg)
+            # msg is a dict: {"data": bytes, "mime_type": "audio/pcm"}
+            await self.session.send_realtime_input(audio=msg)
 
     async def receive_audio(self):
-        """Read from the websocket and pass PCM chunks to the audio handler."""
+        """
+        Read from the websocket and pass PCM chunks to the audio handler.
+        response.data aggregates audio bytes from inline_data parts.
+        """
         assert self.session is not None
         while True:
             turn = self.session.receive()
             async for response in turn:
                 if data := response.data:
-                    # Delegate audio handling
+                    # Audio (24kHz PCM) from model
                     await self.audio_handler(data)
                 if text := response.text:
+                    # Any text the model emits (system messages, etc.)
                     print(text, end="")
 
     async def run(self):
@@ -121,8 +139,8 @@ class AudioLoop:
                 self.out_queue = asyncio.Queue(maxsize=5)
 
                 send_text_task = tg.create_task(self.send_text())
-                tg.create_task(self.send_audio())
                 tg.create_task(self.listen_audio())
+                tg.create_task(self.send_audio())
                 tg.create_task(self.receive_audio())
 
                 await send_text_task
@@ -133,7 +151,6 @@ class AudioLoop:
         except ExceptionGroup as EG:
             traceback.print_exception(EG)
         finally:
-            # Clean up audio streams
             try:
                 if self.mic_stream is not None:
                     self.mic_stream.close()
@@ -147,5 +164,8 @@ class AudioLoop:
 
 
 if __name__ == "__main__":
-    main = AudioLoop()  # or AudioLoop(audio_handler=my_handler)
+    # You can override audio handling by passing your own async handler:
+    # async def my_handler(data: bytes): ...
+    # main = AudioLoop(audio_handler=my_handler)
+    main = AudioLoop()
     asyncio.run(main.run())
