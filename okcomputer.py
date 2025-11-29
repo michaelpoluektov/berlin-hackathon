@@ -7,6 +7,7 @@ from playwright.async_api import async_playwright
 
 from agent import ComputerUseAgent
 from telegram import TelegramClient
+from audio import AudioLoop
 
 
 async def main_async():
