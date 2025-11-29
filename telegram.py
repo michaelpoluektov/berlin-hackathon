@@ -153,7 +153,7 @@ class TelegramClient:
 
             frame_bytes = update.frames[0].frame
             samples = np.frombuffer(frame_bytes, dtype=np.int16)
-            if sum(samples) == 0:
+            if sum(samples.astype(np.int32)) == 0:
                 return
 
             # Call user-provided audio callback

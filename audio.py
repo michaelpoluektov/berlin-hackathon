@@ -30,10 +30,10 @@ class AudioLoop:
     def __init__(
         self,
         *,
+        audio_handler: AudioHandler,
         client: Optional[genai.Client] = None,
         model: str = MODEL,
         config: types.LiveConnectConfig = CONFIG,
-        audio_handler: Optional[AudioHandler] = None,
     ):
         """
         audio_handler: async callable taking a single bytes argument (PCM data).
@@ -48,21 +48,10 @@ class AudioLoop:
 
         self.session: Optional[Any] = None
         self.out_queue: Optional[asyncio.Queue[dict[str, bytes]]] = None
-        self.audio_handler: AudioHandler = audio_handler or self._default_audio_handler
+        self.audio_handler: AudioHandler = audio_handler
         self._stop_event = asyncio.Event()
 
-    async def _default_audio_handler(self, _: bytes) -> None:
-        """Default audio handler: drop output."""
-        return None
-
     async def append_chunk(self, chunk: np.ndarray) -> None:
-        """
-        Append an incoming audio chunk (np.int16 PCM) to the send queue.
-        Chunks should match the format emitted by telegram.py.
-        """
-        if self.out_queue is None:
-            raise RuntimeError("AudioLoop is not running; call run() before appending audio.")
-
         if not isinstance(chunk, np.ndarray):
             chunk = np.asarray(chunk)
         if chunk.dtype != np.int16:
@@ -83,13 +72,12 @@ class AudioLoop:
     async def _receive_audio(self) -> None:
         assert self.session is not None
         try:
-            while True:
-                turn = self.session.receive()
-                async for response in turn:
-                    if data := response.data:
-                        await self.audio_handler(data)
-                    if text := response.text:
-                        print(text, end="")
+            async for response in self.session.receive():
+                print("recv")  # or rename this print to something clearer
+                if data := response.data:
+                    await self.audio_handler(data)
+                if text := response.text:
+                    print(text, end="")
         except asyncio.CancelledError:
             raise
 
@@ -103,8 +91,9 @@ class AudioLoop:
 
         try:
             async with (
-                self.client.aio.live.connect(model=self.model, config=self.config)
-                as session,
+                self.client.aio.live.connect(
+                    model=self.model, config=self.config
+                ) as session,
                 asyncio.TaskGroup() as tg,
             ):
                 self.session = session
